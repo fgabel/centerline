@@ -6,7 +6,7 @@ from numpy import array
 from scipy.spatial import Voronoi
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
 from shapely.ops import unary_union
-
+from multiprocessing import Pool
 from . import exceptions
 
 
@@ -70,26 +70,32 @@ class Centerline(MultiLineString):
         for key in attributes:
             setattr(self, key, attributes.get(key))
 
+    def _check_ridges(self, ridge):
+
+      if self._ridge_is_finite(ridge):
+        input_geometry = self.input_geometry
+        starting_point = self._create_point_with_restored_coordinates(
+          x=self.vertices[ridge[0]][0], y=self.vertices[ridge[0]][1]
+        )
+        ending_point = self._create_point_with_restored_coordinates(
+          x=self.vertices[ridge[1]][0], y=self.vertices[ridge[1]][1]
+        )
+        linestring = LineString((starting_point, ending_point))
+
+        if self._linestring_is_within_input_geometry(linestring, input_geometry):
+          linestrings.append(linestring)
+      return linestring
+
     def _construct_centerline(self):
         vertices, ridges = self._get_voronoi_vertices_and_ridges()
         linestrings = []
-        for ridge in ridges:
-            if self._ridge_is_finite(ridge):
-                starting_point = self._create_point_with_restored_coordinates(
-                    x=vertices[ridge[0]][0], y=vertices[ridge[0]][1]
-                )
-                ending_point = self._create_point_with_restored_coordinates(
-                    x=vertices[ridge[1]][0], y=vertices[ridge[1]][1]
-                )
-                linestring = LineString((starting_point, ending_point))
+        pool = Pool()
 
-                if self._linestring_is_within_input_geometry(linestring):
-                    linestrings.append(linestring)
-
+        linestrings = pool.map(self._check_ridges, ridges)
         if len(linestrings) < 2:
             raise exceptions.TooFewRidgesError
-
-        return unary_union(linestrings)
+        linestrings_unpacked = [ent for sublist in linestrings for ent in sublist]
+        return unary_union(linestrings_unpacked)
 
     def _get_voronoi_vertices_and_ridges(self):
         borders = self._get_densified_borders()
@@ -106,9 +112,9 @@ class Centerline(MultiLineString):
     def _create_point_with_restored_coordinates(self, x, y):
         return (x + self._min_x, y + self._min_y)
 
-    def _linestring_is_within_input_geometry(self, linestring):
+    def _linestring_is_within_input_geometry(self, linestring, input_geometry):
         return (
-            linestring.within(self._input_geometry)
+            linestring.within(input_geometry)
             and len(linestring.coords[0]) > 1
         )
 
